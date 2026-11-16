@@ -1,0 +1,52 @@
+# Локальный запуск для разработки (без кластера): docker compose up --build
+# Перед первым запуском создать сертификат и секреты: ./stand/dev-secrets.sh
+services:
+  gateway:
+    build: ./gateway
+    ports: ["8443:8443"]
+    secrets: [tls_cert, tls_key]
+    depends_on: [backend, frontend]
+
+  frontend:
+    build: ./frontend
+    networks:
+      default:
+        aliases: [tasks.frontend]   # в Swarm это имя возвращает адреса всех реплик
+
+  backend:
+    build:
+      context: ./backend
+      target: runtime
+    environment:
+      APP_ENV: dev
+      SEED_DEMO_DATA: "1"
+    secrets: [db_password, jwt_secret, demo_password]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      default:
+        aliases: [tasks.backend]
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: bank
+      POSTGRES_USER: bank
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bank -d bank"]
+      interval: 5s
+      retries: 10
+
+volumes:
+  pgdata:
+
+secrets:
+  db_password: {file: ./.local/db_password}
+  jwt_secret: {file: ./.local/jwt_secret}
+  demo_password: {file: ./.local/demo_password}
+  tls_cert: {file: ./.local/tls.crt}
+  tls_key: {file: ./.local/tls.key}
