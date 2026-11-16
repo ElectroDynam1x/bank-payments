@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Платёжные поручения</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">₽</span>
+      <span>Сервис платёжных поручений</span>
+      <span id="env-badge" class="badge badge-env hidden"></span>
+    </div>
+    <div id="userbox" class="userbox hidden">
+      <span id="user-name"></span>
+      <span id="user-role" class="badge"></span>
+      <button id="logout" class="btn btn-light">Выйти</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="login-view" class="card login">
+      <h1>Вход в систему</h1>
+      <form id="login-form">
+        <label>Логин
+          <input name="username" autocomplete="username" required>
+        </label>
+        <label>Пароль
+          <input name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <p id="login-error" class="error hidden"></p>
+        <button class="btn btn-primary" type="submit">Войти</button>
+      </form>
+    </section>
+
+    <section id="app-view" class="hidden">
+      <nav class="tabs">
+        <button class="tab active" data-tab="accounts">Счета</button>
+        <button class="tab" data-tab="payments">Платёжные поручения</button>
+        <button class="tab" data-tab="audit" id="tab-audit">Журнал аудита</button>
+      </nav>
+      <p id="notice" class="notice hidden"></p>
+
+      <div id="accounts" class="card panel">
+        <div class="toolbar">
+          <h2>Счета клиентов</h2>
+          <button id="account-add" class="btn btn-primary write-only">Новый счёт</button>
+        </div>
+        <table>
+          <thead><tr><th>№</th><th>Номер счёта</th><th>Владелец</th><th>Валюта</th>
+            <th class="num">Остаток</th><th>Статус</th><th></th></tr></thead>
+          <tbody id="accounts-body"></tbody>
+          <tfoot><tr><td colspan="4">Итого по открытым счетам</td>
+            <td class="num" id="accounts-total"></td><td colspan="2"></td></tr></tfoot>
+        </table>
+      </div>
+
+      <div id="payments" class="card panel hidden">
+        <div class="toolbar">
+          <h2>Платёжные поручения</h2>
+          <label class="inline">Статус
+            <select id="payment-filter">
+              <option value="">все</option>
+              <option value="draft">черновик</option>
+              <option value="executed">исполнено</option>
+              <option value="rejected">отклонено</option>
+            </select>
+          </label>
+          <button id="payment-add" class="btn btn-primary write-only">Новое поручение</button>
+        </div>
+        <table>
+          <thead><tr><th>№</th><th>Счёт плательщика</th><th>Получатель</th><th class="num">Сумма</th>
+            <th>Назначение платежа</th><th>Статус</th><th>Создал</th><th></th></tr></thead>
+          <tbody id="payments-body"></tbody>
+        </table>
+      </div>
+
+      <div id="audit" class="card panel hidden">
+        <div class="toolbar"><h2>Журнал аудита</h2></div>
+        <table>
+          <thead><tr><th>Время</th><th>Пользователь</th><th>Действие</th><th>Объект</th>
+            <th>Идентификатор</th><th>Сведения</th></tr></thead>
+          <tbody id="audit-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="account-dialog">
+    <form id="account-form" method="dialog">
+      <h3 id="account-title">Новый счёт</h3>
+      <label>Номер счёта (20 цифр)
+        <input name="number" pattern="\d{20}" maxlength="20" required>
+      </label>
+      <label>Владелец
+        <input name="owner_name" minlength="2" maxlength="200" required>
+      </label>
+      <label>Начальный остаток, руб.
+        <input name="balance" type="number" min="0" step="0.01" value="0.00" required>
+      </label>
+      <p class="error hidden"></p>
+      <div class="actions">
+        <button type="button" class="btn btn-light" data-close>Отмена</button>
+        <button type="submit" class="btn btn-primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="payment-dialog">
+    <form id="payment-form" method="dialog">
+      <h3 id="payment-title">Новое платёжное поручение</h3>
+      <label>Счёт плательщика
+        <select name="account_id" required></select>
+      </label>
+      <label>Получатель
+        <input name="beneficiary_name" minlength="2" maxlength="200" required>
+      </label>
+      <div class="row">
+        <label>Счёт получателя (20 цифр)
+          <input name="beneficiary_account" pattern="\d{20}" maxlength="20" required>
+        </label>
+        <label>БИК (9 цифр)
+          <input name="beneficiary_bik" pattern="\d{9}" maxlength="9" required>
+        </label>
+      </div>
+      <label>Сумма, руб.
+        <input name="amount" type="number" min="0.01" step="0.01" required>
+      </label>
+      <label>Назначение платежа
+        <input name="purpose" minlength="3" maxlength="210" required>
+      </label>
+      <p class="error hidden"></p>
+      <div class="actions">
+        <button type="button" class="btn btn-light" data-close>Отмена</button>
+        <button type="submit" class="btn btn-primary">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <footer>
+    <span>Сборка интерфейса: __APP_VERSION__</span>
+    <span id="backend-info">Сервер: нет данных</span>
+  </footer>
+  <script src="/app.js"></script>
+</body>
+</html>
