@@ -1,0 +1,139 @@
+# Конвейер CI/CD сервиса платёжных поручений.
+# Gitea Actions, синтаксис совместим с GitHub Actions.
+#
+#   отправка в ветку main  -> проверка кода, сборка образов, развёртывание в тестовый контур
+#   тег выпуска vX.Y.Z     -> развёртывание тех же образов в промышленный контур
+#
+# Образы собираются один раз. В промышленный контур попадает ровно та сборка,
+# которая прошла проверку в тестовом. Тег выпуска вправе создать только
+# ответственный за выпуск: в репозитории включена защита тегов v*.
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+
+env:
+  REGISTRY: ${{ vars.REGISTRY }}
+
+jobs:
+  test:
+    name: Проверка кода
+    runs-on: deploy-host
+    steps:
+      - uses: https://gitea.com/actions/checkout@v4
+      - name: Статический анализ и модульные тесты
+        working-directory: backend
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet -r requirements-dev.txt
+          .venv/bin/ruff check .
+          .venv/bin/python -m pytest -q
+
+  build:
+    name: Сборка образов
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    runs-on: deploy-host
+    steps:
+      - uses: https://gitea.com/actions/checkout@v4
+      - name: Версия сборки
+        run: echo "VERSION=$(cat VERSION)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - name: Вход в реестр образов
+        run: echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY" --username "$REGISTRY_USER" --password-stdin
+        env:
+          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Сборка и публикация образов
+        run: |
+          for service in backend frontend gateway; do
+            docker build --quiet \
+              --build-arg BASE_REGISTRY="$REGISTRY/mirror" \
+              --build-arg APP_VERSION="$VERSION" \
+              --build-arg GIT_COMMIT="$GITHUB_SHA" \
+              --tag "$REGISTRY/bank/$service:$VERSION" "$service"
+            docker push --quiet "$REGISTRY/bank/$service:$VERSION"
+          done
+          docker image ls --format 'table {{.Repository}}\t{{.Tag}}\t{{.Size}}' | grep "$VERSION"
+
+  deploy-stage:
+    name: Развёртывание в тестовый контур
+    needs: build
+    runs-on: deploy-host
+    env:
+      DOCKER_HOST: ${{ vars.SWARM_HOST }}
+      DOCKER_TLS_VERIFY: "1"
+      DOCKER_CERT_PATH: /tmp/swarm-${{ github.run_id }}-stage
+      CA_CERT: ${{ vars.CA_CERT }}
+    steps:
+      - uses: https://gitea.com/actions/checkout@v4
+      - name: Версия сборки
+        run: echo "VERSION=$(cat VERSION)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - name: Доступ к кластеру и реестру
+        run: |
+          umask 077 && mkdir -p "$DOCKER_CERT_PATH"
+          printf '%s\n' "$SWARM_CA" > "$DOCKER_CERT_PATH/ca.pem"
+          printf '%s\n' "$SWARM_CERT" > "$DOCKER_CERT_PATH/cert.pem"
+          printf '%s\n' "$SWARM_KEY" > "$DOCKER_CERT_PATH/key.pem"
+          echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY" --username "$REGISTRY_USER" --password-stdin
+        env:
+          SWARM_CA: ${{ secrets.SWARM_CA }}
+          SWARM_CERT: ${{ secrets.SWARM_CERT }}
+          SWARM_KEY: ${{ secrets.SWARM_KEY }}
+          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Развёртывание и проверка работоспособности
+        run: deploy/scripts/deploy.sh stage "$VERSION"
+        env:
+          DEMO_PASSWORD: ${{ secrets.DEMO_PASSWORD_STAGE }}
+      - name: Удаление ключей доступа
+        if: always()
+        run: rm -rf "$DOCKER_CERT_PATH"
+
+  deploy-prod:
+    name: Развёртывание в промышленный контур
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: deploy-host
+    env:
+      DOCKER_HOST: ${{ vars.SWARM_HOST }}
+      DOCKER_TLS_VERIFY: "1"
+      DOCKER_CERT_PATH: /tmp/swarm-${{ github.run_id }}-prod
+      CA_CERT: ${{ vars.CA_CERT }}
+    steps:
+      - uses: https://gitea.com/actions/checkout@v4
+      - name: Проверка тега выпуска
+        run: |
+          if [ "$GITHUB_REF_NAME" != "v$(cat VERSION)" ]; then
+            echo "Тег $GITHUB_REF_NAME не соответствует версии в файле VERSION ($(cat VERSION))"
+            exit 1
+          fi
+          echo "VERSION=$(cat VERSION)-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      - name: Доступ к кластеру и реестру
+        run: |
+          umask 077 && mkdir -p "$DOCKER_CERT_PATH"
+          printf '%s\n' "$SWARM_CA" > "$DOCKER_CERT_PATH/ca.pem"
+          printf '%s\n' "$SWARM_CERT" > "$DOCKER_CERT_PATH/cert.pem"
+          printf '%s\n' "$SWARM_KEY" > "$DOCKER_CERT_PATH/key.pem"
+          echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY" --username "$REGISTRY_USER" --password-stdin
+        env:
+          SWARM_CA: ${{ secrets.SWARM_CA }}
+          SWARM_CERT: ${{ secrets.SWARM_CERT }}
+          SWARM_KEY: ${{ secrets.SWARM_KEY }}
+          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+      - name: Образы выпуска есть в реестре
+        run: |
+          # в промышленный контур идут образы, собранные из этого коммита и проверенные в тестовом
+          for service in backend frontend gateway; do
+            docker manifest inspect "$REGISTRY/bank/$service:$VERSION" > /dev/null
+            echo "образ найден: $REGISTRY/bank/$service:$VERSION"
+          done
+      - name: Развёртывание и проверка работоспособности
+        run: deploy/scripts/deploy.sh prod "$VERSION"
+        env:
+          DEMO_PASSWORD: ${{ secrets.DEMO_PASSWORD_PROD }}
+      - name: Удаление ключей доступа
+        if: always()
+        run: rm -rf "$DOCKER_CERT_PATH"
